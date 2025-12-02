@@ -8,7 +8,7 @@ int main(int argc, char *argv[]) {
 
   // Captures the user's command in the "command" variable
   char command[1024];
-  const char *commands[] = { "exit" };
+  const char *commands[] = { "exit" , "echo"};
 
   // Infinite read-execute loop
   while (1) {
@@ -25,8 +25,17 @@ int main(int argc, char *argv[]) {
 
     // Remove the trailing newline before comparing
     command[strcspn(command, "\n")] = '\0';
+
+    
+
+    // check for 'exit' command
     if (strcmp(command, commands[0]) == 0) {
       break;
+    }
+    // check for echo command
+    if (strcmp(command, commands[1]) == 0) {
+      command[strcspn(command, "echo")] = '\0';
+      printf("%s\n", command);
     }
 
     // Remove the trailing newline
