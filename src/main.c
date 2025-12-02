@@ -15,9 +15,7 @@ int main(int argc, char *argv[]) {
     printf("$ ");
 
     // Read input; exit loop on EOF
-    if (fgets(command, sizeof(command), stdin) == NULL) {
-      break;
-    }
+    fgets(command, sizeof(command), stdin) == NULL;
 
     // Remove the trailing newline
     command[strcspn(command, "\n")] = '\0';
