@@ -8,7 +8,7 @@ int main(int argc, char *argv[]) {
 
   // Captures the user's command in the "command" variable
   char command[1024];
-  const char *commands[] = { "exit" , "echo"};
+  const char *commands[] = { "exit" , "echo "};
 
   // Infinite read-execute loop
   while (1) {
