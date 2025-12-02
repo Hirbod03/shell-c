@@ -8,14 +8,26 @@ int main(int argc, char *argv[]) {
 
   // Captures the user's command in the "command" variable
   char command[1024];
+  const char *commands[] = { "exit" };
 
   // Infinite read-execute loop
   while (1) {
     // Prompt
     printf("$ ");
 
+    // storing user input
+    char *input = fgets(command, sizeof(command), stdin);
+
     // Read input; exit loop on EOF
-    fgets(command, sizeof(command), stdin) == NULL;
+    if (input == NULL) {
+      break;
+    }
+
+    // Remove the trailing newline before comparing
+    command[strcspn(command, "\n")] = '\0';
+    if (strcmp(command, commands[0]) == 0) {
+      break;
+    }
 
     // Remove the trailing newline
     command[strcspn(command, "\n")] = '\0';
