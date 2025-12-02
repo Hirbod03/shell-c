@@ -26,20 +26,24 @@ int main(int argc, char *argv[]) {
     // Remove the trailing newline before comparing
     command[strcspn(command, "\n")] = '\0';
 
-    
-
+    // check for empty input
+    if (strlen(command)<1){
+      continue;
+    }
     // check for 'exit' command
     if (strcmp(command, commands[0]) == 0) {
       break;
     }
     // check for echo command
-    if (strcmp(command, commands[1]) == 0) {
-      command[strcspn(command, "echo")] = '\0';
-      printf("%s\n", command);
+    if (strncmp(command, commands[1], 5) == 0) {
+      // printing everything after 'echo'
+      printf("%s\n", command + 5);
+      continue;
     }
-
-    // Remove the trailing newline
-    command[strcspn(command, "\n")] = '\0';
+    else if (strcmp(command, "echo")==0){
+      printf("\n");
+      continue;
+    }
 
     // Prints "<command>: command not found" msg
     printf("%s: command not found\n", command);
