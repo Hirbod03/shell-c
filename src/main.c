@@ -2,6 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Forward declarations
+int shell_exit(char *args);
+int shell_echo(char *args);
+int shell_help(char *args);
+int shell_type(char *args);
+int num_builtins();
+
 // function signature for a built-in command (returns int so we can signal errors or exit status)
 typedef int (*builtin_func)(char *args);
 
@@ -9,6 +16,14 @@ typedef int (*builtin_func)(char *args);
 struct builtin {
   char *name;
   builtin_func func;
+};
+
+// dispastch table (best practice allegedly)
+struct builtin builtins[] = {
+  {"exit", shell_exit},
+  {"echo", shell_echo},
+  {"help", shell_help},
+  {"type", shell_type},
 };
 
 // exit function
@@ -27,18 +42,51 @@ int shell_echo(char *args) {
   return 1; // 1 to signal "continue running"
 }
 
+int shell_type(char *args) {
+  // if no arguments provided, print usage error
+  if (args == NULL) { 
+    printf("type: expected argument\n");
+    return 1;
+  }
+
+  // duplicate the args so we can tokenize safely (strtok modifies the string)
+  char *copy = strdup(args);
+  if (!copy) {
+    perror("strdup");
+    return 1;
+  }
+
+  // get the first token (separated by spaces)
+  char *token = strtok(copy, " ");
+  while (token != NULL) {
+    int found = 0;
+    // iterate over builtins to see if token matches a builtin name
+    for (int i = 0; i < num_builtins(); i++) {
+      if (strcmp(token, builtins[i].name) == 0) {
+        // if matched, report that it's a shell builtin
+        printf("%s is a shell builtin\n", token);
+        found = 1;
+        break;
+      }
+    }
+    // if no match was found, report accordingly
+    if (!found) {
+      printf("%s: not found\n", token);
+    }
+    // advance to the next space-separated token
+    token = strtok(NULL, " ");
+  }
+
+  // free the duplicated string to avoid leaks
+  free(copy);
+  return 1; // continue running the shell
+}
+
 int shell_help(char *args) {
   printf("Hirbod's Shell. Built-ins available:\n");
   printf("  cd\n  help\n  exit\n  echo\n");
   return 1;
 }
-
-// dispastch table (best practice allegedly)
-struct builtin builtins[] = {
-  {"exit", shell_exit},
-  {"echo", shell_echo},
-  {"help", shell_help},
-};
 
 // returns the number of built-in commands in the shell
 int num_builtins() {
