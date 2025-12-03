@@ -2,12 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+# define MAX_PATH_ENTRIES 100
+
 // Forward declarations
 int shell_exit(char *args);
 int shell_echo(char *args);
 int shell_help(char *args);
 int shell_type(char *args);
 int num_builtins();
+void parse_path(char *path_string);
 
 // function signature for a built-in command (returns int so we can signal errors or exit status)
 typedef int (*builtin_func)(char *args);
@@ -25,6 +28,31 @@ struct builtin builtins[] = {
   {"help", shell_help},
   {"type", shell_type},
 };
+
+// storing path directories
+char *path_dirs[MAX_PATH_ENTRIES];
+int path_count = 0;
+
+void parse_path(char *path_string) {
+    if (path_string == NULL) return;
+    
+    // IMPORTANT: duplicate the string because strtok modifies it
+    char *path_copy = strdup(path_string);
+    if (!path_copy) {
+        perror("strdup");
+        return;
+    }
+    
+    // Tokenize by ':'
+    char *dir = strtok(path_copy, ":");
+    while (dir != NULL && path_count < MAX_PATH_ENTRIES) {
+        path_dirs[path_count] = strdup(dir);  // Store each directory
+        path_count++;
+        dir = strtok(NULL, ":");
+    }
+    
+    free(path_copy);
+}
 
 // exit function
 int shell_exit(char *args) {
@@ -71,7 +99,9 @@ int shell_type(char *args) {
     }
     // if no match was found, report accordingly
     if (!found) {
-      printf("%s: not found\n", token);
+      for (int i = 0; i < path_count; i++){
+        printf("%s\n", path_dirs[i]);
+      }
     }
     // advance to the next space-separated token
     token = strtok(NULL, " ");
@@ -95,6 +125,15 @@ int num_builtins() {
 
 int main(int argc, char *argv[]) {
   setbuf(stdout, NULL);
+
+  // read PATH at statup
+  char *shell_path = getenv("PATH");
+  if (shell_path == NULL) {
+    fprintf(stderr, "Warning: PATH not set\n");
+  } else {
+    parse_path(shell_path);  // Parse it into array
+  }
+
   char command[1024];
 
   while (1) {
