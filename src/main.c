@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 # define MAX_PATH_ENTRIES 100
 
@@ -100,7 +101,21 @@ int shell_type(char *args) {
     // if no match was found, report accordingly
     if (!found) {
       for (int i = 0; i < path_count; i++){
-        printf("%s\n", path_dirs[i]);
+        // appending program name to dir path
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], token);
+        // printf("%s\n", full_path);
+        if (access(full_path, F_OK) == 0){ // if the file exists
+          if (access(full_path, X_OK) == 0){ // if the file is executable
+            printf("%s is %s\n", token, full_path);
+            found = 1;
+            break;
+          }
+          continue; // if file is not executable, we just skip
+        }
+      }
+      if (!found){
+        printf("%s: not found\n", token);
       }
     }
     // advance to the next space-separated token
