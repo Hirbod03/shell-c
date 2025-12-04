@@ -2,8 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
-# define MAX_PATH_ENTRIES 100
+#define MAX_PATH_ENTRIES 100
+#define MAX_ARGS 100
 
 // Forward declarations
 int shell_exit(char *args);
@@ -12,8 +14,10 @@ int shell_help(char *args);
 int shell_type(char *args);
 int num_builtins();
 void parse_path(char *path_string);
+char* ext_check(char *program_name);
+void execute_external_program(char *full_path, char *cmd_name, char *args);
 
-// function signature for a built-in command (returns int so we can signal errors or exit status)
+// function signature for a built-in command
 typedef int (*builtin_func)(char *args);
 
 // structure linking a name to a function
@@ -22,7 +26,7 @@ struct builtin {
   builtin_func func;
 };
 
-// dispastch table (best practice allegedly)
+// dispatch table
 struct builtin builtins[] = {
   {"exit", shell_exit},
   {"echo", shell_echo},
@@ -55,6 +59,61 @@ void parse_path(char *path_string) {
     free(path_copy);
 }
 
+char* ext_check(char *program_name){
+  for (int i = 0; i < path_count; i++){
+    // appending program name to dir path
+    static char full_path[1024];
+    snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], program_name);
+    if (access(full_path, F_OK) == 0 && access(full_path, X_OK) == 0){
+      return full_path;
+    }
+  }
+  return NULL;
+}
+
+void execute_external_program(char *full_path, char *cmd_name, char *args) {
+    // Build argv array
+    char *argv[MAX_ARGS];
+    int argc = 0;
+    
+    // argv[0] is the program name (not full path)
+    argv[argc++] = cmd_name;
+    
+    // Parse arguments if they exist
+    if (args != NULL) {
+        char *args_copy = strdup(args);
+        if (!args_copy) {
+            perror("strdup");
+            return;
+        }
+        
+        char *token = strtok(args_copy, " ");
+        while (token != NULL && argc < MAX_ARGS - 1) {
+            argv[argc++] = token;
+            token = strtok(NULL, " ");
+        }
+    }
+    
+    argv[argc] = NULL;  // NULL-terminate the array
+    
+    // Fork and execute
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return;
+    } else if (pid == 0) {
+        // Child process
+        execv(full_path, argv);
+        // If execv returns, it failed
+        perror("execv");
+        exit(1);
+    } else {
+        // Parent process - wait for child
+        int status;
+        waitpid(pid, &status, 0);
+    }
+}
+
 // exit function
 int shell_exit(char *args) {
   exit(0);
@@ -78,7 +137,7 @@ int shell_type(char *args) {
     return 1;
   }
 
-  // duplicate the args so we can tokenize safely (strtok modifies the string)
+  // duplicate the args so we can tokenize safely
   char *copy = strdup(args);
   if (!copy) {
     perror("strdup");
@@ -98,21 +157,12 @@ int shell_type(char *args) {
         break;
       }
     }
-    // if no match was found, report accordingly
+    // if no match was found, check PATH
     if (!found) {
-      for (int i = 0; i < path_count; i++){
-        // appending program name to dir path
-        char full_path[1024];
-        snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], token);
-        // printf("%s\n", full_path);
-        if (access(full_path, F_OK) == 0){ // if the file exists
-          if (access(full_path, X_OK) == 0){ // if the file is executable
-            printf("%s is %s\n", token, full_path);
-            found = 1;
-            break;
-          }
-          continue; // if file is not executable, we just skip
-        }
+      char *full_path = ext_check(token);
+      if (full_path != NULL) {
+        printf("%s is %s\n", token, full_path);
+        found = 1;
       }
       if (!found){
         printf("%s: not found\n", token);
@@ -141,7 +191,7 @@ int num_builtins() {
 int main(int argc, char *argv[]) {
   setbuf(stdout, NULL);
 
-  // read PATH at statup
+  // read PATH at startup
   char *shell_path = getenv("PATH");
   if (shell_path == NULL) {
     fprintf(stderr, "Warning: PATH not set\n");
@@ -161,12 +211,12 @@ int main(int argc, char *argv[]) {
     // parsing logic
     char *cmd_name = strtok(command, " "); // storing command
     char *args = strtok(NULL, ""); // storing command arguments
-
+    
     if (cmd_name == NULL) continue;
 
     int found = 0;
     
-    // nice generic loop that I won't have to tinker with after adding more commands
+    // check builtins first
     for (int i = 0; i < num_builtins(); i++) {
       if (strcmp(cmd_name, builtins[i].name) == 0) {
         builtins[i].func(args);
@@ -175,9 +225,14 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    // if not a builtin, check for external program
     if (!found) {
-      // where non-builtins are handled
-      printf("%s: command not found\n", cmd_name);
+      char *full_path = ext_check(cmd_name);
+      if (full_path != NULL){
+        execute_external_program(full_path, cmd_name, args);
+      } else {
+        printf("%s: command not found\n", cmd_name);
+      }
     }
   }
   return 0;
