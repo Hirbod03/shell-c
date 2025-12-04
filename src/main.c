@@ -12,7 +12,7 @@ int shell_exit(char *args);
 int shell_echo(char *args);
 int shell_help(char *args);
 int shell_type(char *args);
-int shell_pwd();
+int shell_pwd(char *args);
 int num_builtins();
 void parse_path(char *path_string);
 char* ext_check(char *program_name);
@@ -185,7 +185,7 @@ int shell_help(char *args) {
   return 1;
 }
 
-int shell_pwd(){
+int shell_pwd(char *args){
   char cwd[1024];
   if (getcwd(cwd, sizeof(cwd)) != NULL) {
       printf("%s\n", cwd);
