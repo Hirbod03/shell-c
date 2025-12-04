@@ -12,6 +12,7 @@ int shell_exit(char *args);
 int shell_echo(char *args);
 int shell_help(char *args);
 int shell_type(char *args);
+void shell_pwd();
 int num_builtins();
 void parse_path(char *path_string);
 char* ext_check(char *program_name);
@@ -32,6 +33,7 @@ struct builtin builtins[] = {
   {"echo", shell_echo},
   {"help", shell_help},
   {"type", shell_type},
+  {"pwd", shell_pwd},
 };
 
 // storing path directories
@@ -181,6 +183,15 @@ int shell_help(char *args) {
   printf("Hirbod's Shell. Built-ins available:\n");
   printf("  cd\n  help\n  exit\n  echo\n");
   return 1;
+}
+
+void shell_pwd(){
+  char cwd[1024];
+  if (getcwd(cwd, sizeof(cwd)) != NULL) {
+      printf("%s\n", cwd);
+  } else {
+      perror("getcwd");
+  }
 }
 
 // returns the number of built-in commands in the shell
