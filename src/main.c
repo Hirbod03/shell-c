@@ -13,6 +13,7 @@ int shell_echo(char *args);
 int shell_help(char *args);
 int shell_type(char *args);
 int shell_pwd(char *args);
+int shell_cd(char *args);
 int num_builtins();
 void parse_path(char *path_string);
 char* ext_check(char *program_name);
@@ -39,6 +40,96 @@ struct builtin builtins[] = {
 // storing path directories
 char *path_dirs[MAX_PATH_ENTRIES];
 int path_count = 0;
+
+// exit function
+int shell_exit(char *args) {
+  exit(0);
+  return 0; // unreachable, but satisfies compiler
+}
+
+int shell_echo(char *args) {
+  // print the args if they exist
+  if (args != NULL) {
+      printf("%s\n", args);
+    } else {
+      printf("\n");
+    }
+  return 1; // 1 to signal "continue running"
+}
+
+int shell_type(char *args) {
+  // if no arguments provided, print usage error
+  if (args == NULL) { 
+    printf("type: expected argument\n");
+    return 1;
+  }
+  
+  // duplicate the args so we can tokenize safely
+  char *copy = strdup(args);
+  if (!copy) {
+    perror("strdup");
+    return 1;
+  }
+  
+  // get the first token (separated by spaces)
+  char *token = strtok(copy, " ");
+  while (token != NULL) {
+    int found = 0;
+    // iterate over builtins to see if token matches a builtin name
+    for (int i = 0; i < num_builtins(); i++) {
+      if (strcmp(token, builtins[i].name) == 0) {
+        // if matched, report that it's a shell builtin
+        printf("%s is a shell builtin\n", token);
+        found = 1;
+        break;
+      }
+    }
+    // if no match was found, check PATH
+    if (!found) {
+      char *full_path = ext_check(token);
+      if (full_path != NULL) {
+        printf("%s is %s\n", token, full_path);
+        found = 1;
+      }
+      if (!found){
+        printf("%s: not found\n", token);
+      }
+    }
+    // advance to the next space-separated token
+    token = strtok(NULL, " ");
+  }
+
+  // free the duplicated string to avoid leaks
+  free(copy);
+  return 1; // continue running the shell
+}
+
+int shell_help(char *args) {
+  printf("Hirbod's Shell. Built-ins available:\n");
+  printf("  cd\n  help\n  exit\n  echo\n");
+  return 1;
+}
+
+int shell_pwd(char *args){
+  char cwd[1024];
+  if (getcwd(cwd, sizeof(cwd)) != NULL) {
+    printf("%s\n", cwd);
+    return 0;
+  } 
+  else {
+    perror("getcwd");
+    return -1;
+  }
+}
+
+int shell_cd(char *args){
+  
+}
+
+// returns the number of built-in commands in the shell
+int num_builtins() {
+  return sizeof(builtins) / sizeof(struct builtin);
+}
 
 void parse_path(char *path_string) {
     if (path_string == NULL) return;
@@ -114,91 +205,6 @@ void execute_external_program(char *full_path, char *cmd_name, char *args) {
         int status;
         waitpid(pid, &status, 0);
     }
-}
-
-// exit function
-int shell_exit(char *args) {
-  exit(0);
-  return 0; // unreachable, but satisfies compiler
-}
-
-int shell_echo(char *args) {
-  // print the args if they exist
-  if (args != NULL) {
-      printf("%s\n", args);
-  } else {
-      printf("\n");
-  }
-  return 1; // 1 to signal "continue running"
-}
-
-int shell_type(char *args) {
-  // if no arguments provided, print usage error
-  if (args == NULL) { 
-    printf("type: expected argument\n");
-    return 1;
-  }
-
-  // duplicate the args so we can tokenize safely
-  char *copy = strdup(args);
-  if (!copy) {
-    perror("strdup");
-    return 1;
-  }
-
-  // get the first token (separated by spaces)
-  char *token = strtok(copy, " ");
-  while (token != NULL) {
-    int found = 0;
-    // iterate over builtins to see if token matches a builtin name
-    for (int i = 0; i < num_builtins(); i++) {
-      if (strcmp(token, builtins[i].name) == 0) {
-        // if matched, report that it's a shell builtin
-        printf("%s is a shell builtin\n", token);
-        found = 1;
-        break;
-      }
-    }
-    // if no match was found, check PATH
-    if (!found) {
-      char *full_path = ext_check(token);
-      if (full_path != NULL) {
-        printf("%s is %s\n", token, full_path);
-        found = 1;
-      }
-      if (!found){
-        printf("%s: not found\n", token);
-      }
-    }
-    // advance to the next space-separated token
-    token = strtok(NULL, " ");
-  }
-
-  // free the duplicated string to avoid leaks
-  free(copy);
-  return 1; // continue running the shell
-}
-
-int shell_help(char *args) {
-  printf("Hirbod's Shell. Built-ins available:\n");
-  printf("  cd\n  help\n  exit\n  echo\n");
-  return 1;
-}
-
-int shell_pwd(char *args){
-  char cwd[1024];
-  if (getcwd(cwd, sizeof(cwd)) != NULL) {
-      printf("%s\n", cwd);
-      return 0;
-  } else {
-      perror("getcwd");
-      return -1;
-  }
-}
-
-// returns the number of built-in commands in the shell
-int num_builtins() {
-  return sizeof(builtins) / sizeof(struct builtin);
 }
 
 int main(int argc, char *argv[]) {
