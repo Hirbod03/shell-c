@@ -35,6 +35,7 @@ struct builtin builtins[] = {
   {"help", shell_help},
   {"type", shell_type},
   {"pwd", shell_pwd},
+  {"cd", shell_cd},
 };
 
 // storing path directories
@@ -123,7 +124,19 @@ int shell_pwd(char *args){
 }
 
 int shell_cd(char *args){
+  // if no arguments provided, print usage error
+  if (args == NULL) {
+    fprintf(stderr, "cd: missing argument\n");
+    return 1;
+  }
   
+  // attempt to change directory
+  if (chdir(args) != 0) {
+    // if chdir fails, print error message
+    fprintf(stderr, "cd: %s: No such file or directory\n", args);
+  }
+  
+  return 1; // continue running the shell
 }
 
 // returns the number of built-in commands in the shell
