@@ -130,8 +130,29 @@ int shell_cd(char *args){
     return 1;
   }
   
+  char *target_dir = args;
+  
+  // handle ~ character (home directory)
+  if (args[0] == '~') {
+    char *home = getenv("HOME");
+    if (home == NULL) {
+      fprintf(stderr, "cd: HOME not set\n");
+      return 1;
+    }
+    
+    // if it's just ~, use HOME directly
+    if (args[1] == '\0') {
+      target_dir = home;
+    } else if (args[1] == '/') {
+      // handle ~/path case
+      static char expanded_path[1024];
+      snprintf(expanded_path, sizeof(expanded_path), "%s%s", home, args + 1);
+      target_dir = expanded_path;
+    }
+  }
+  
   // attempt to change directory
-  if (chdir(args) != 0) {
+  if (chdir(target_dir) != 0) {
     // if chdir fails, print error message
     fprintf(stderr, "cd: %s: No such file or directory\n", args);
   }
