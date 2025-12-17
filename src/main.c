@@ -233,6 +233,21 @@ int parse_command(const char *line, char *argv[], int max_args) {
       continue;
     }
 
+    /* backslash handling inside double quotes: escape only " and \ */
+    if (in_double_quote && c == '\\') {
+      char next = *(++p);
+      if (next == '\0') break; // nothing to escape at end
+      if (next == '"' || next == '\\') {
+        c = next; // consume backslash, keep escaped char
+      } else {
+        // backslash is literal for other chars; keep both
+        if (len < (int)sizeof(token) - 1) {
+          token[len++] = '\\';
+        }
+        c = next;
+      }
+    }
+
     // backslash outside quotes escapes the next character (including whitespace)
     if (!in_single_quote && !in_double_quote && c == '\\') {
       char next = *(++p);
