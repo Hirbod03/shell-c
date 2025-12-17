@@ -151,7 +151,7 @@ int num_builtins() {
 void parse_path(char *path_string) {
     if (path_string == NULL) return;
     
-    // IMPORTANT: duplicate the string because strtok modifies it
+  // duplicate the string because strtok modifies it
     char *path_copy = strdup(path_string);
     if (!path_copy) {
         perror("strdup");
@@ -182,6 +182,7 @@ char* ext_check(char *program_name){
 }
 
 void execute_external_program(char *full_path, int argc, char *argv[]) {
+  // argv already prepared by parse_command; ensure NULL terminator
     argv[argc] = NULL;
 
     pid_t pid = fork();
@@ -201,18 +202,26 @@ void execute_external_program(char *full_path, int argc, char *argv[]) {
 int parse_command(const char *line, char *argv[], int max_args) {
   int argc = 0;
   int in_single_quote = 0;
+  int in_double_quote = 0;
   char token[1024];
   int len = 0;
 
-  for (const char *p = line; ; p++) {
+  for (const char *p = line;; p++) {
     char c = *p;
 
-    if (c == '\'') {
+    // toggle quote modes; each quote type is ignored while inside the other
+    if (!in_double_quote && c == '\'') {
       in_single_quote = !in_single_quote;
       continue;
     }
 
-    if ((c == '\0' || (!in_single_quote && isspace((unsigned char)c)))) {
+    if (!in_single_quote && c == '"') {
+      in_double_quote = !in_double_quote;
+      continue;
+    }
+
+    // outside quotes, whitespace ends the current token
+    if ((c == '\0') || (!in_single_quote && !in_double_quote && isspace((unsigned char)c))) {
       if (len > 0) {
         token[len] = '\0';
         if (argc < max_args - 1) {
@@ -277,6 +286,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    // free tokens allocated by parse_command
     for (int i = 0; i < argc; i++) {
       free(argv[i]);
     }
