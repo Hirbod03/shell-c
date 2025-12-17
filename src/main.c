@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,8 +19,11 @@ int shell_cd(int argc, char *argv[]);
 int num_builtins();
 void parse_path(char *path_string);
 char* ext_check(char *program_name);
-void execute_external_program(char *full_path, int argc, char *argv[]);
+void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_path);
 int parse_command(const char *line, char *argv[], int max_args);
+int setup_output_redirect(const char *path, int should_exit_on_error);
+int save_and_redirect_stdout(const char *path);
+void restore_stdout(int saved_fd);
 
 // function signature for a built-in command
 typedef int (*builtin_func)(int argc, char *argv[]);
@@ -181,7 +185,50 @@ char* ext_check(char *program_name){
   return NULL;
 }
 
-void execute_external_program(char *full_path, int argc, char *argv[]) {
+// Open file and redirect stdout to it. Returns 0 on success, -1 on error.
+// If should_exit_on_error is true, exits process on failure (for child processes).
+int setup_output_redirect(const char *path, int should_exit_on_error) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  if (fd < 0) {
+    perror("open");
+    if (should_exit_on_error) exit(1);
+    return -1;
+  }
+  if (dup2(fd, STDOUT_FILENO) < 0) {
+    perror("dup2");
+    close(fd);
+    if (should_exit_on_error) exit(1);
+    return -1;
+  }
+  close(fd);
+  return 0;
+}
+
+// Save current stdout and redirect to file. Returns saved fd or -1 on error.
+int save_and_redirect_stdout(const char *path) {
+  int saved_stdout = dup(STDOUT_FILENO);
+  if (saved_stdout < 0) {
+    perror("dup");
+    return -1;
+  }
+  if (setup_output_redirect(path, 0) < 0) {
+    close(saved_stdout);
+    return -1;
+  }
+  return saved_stdout;
+}
+
+// Restore stdout from saved file descriptor.
+void restore_stdout(int saved_fd) {
+  if (saved_fd != -1) {
+    dup2(saved_fd, STDOUT_FILENO);
+    close(saved_fd);
+  }
+}
+
+// Fork/exec an external program, optionally redirecting stdout to redirect_path.
+// The argv array is already assembled and NULL-terminated here.
+void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_path) {
   // argv already prepared by parse_command; ensure NULL terminator
     argv[argc] = NULL;
 
@@ -190,7 +237,11 @@ void execute_external_program(char *full_path, int argc, char *argv[]) {
         perror("fork");
         return;
     } else if (pid == 0) {
-        execv(full_path, argv);
+      // Child: set up redirection before exec so only stdout is redirected.
+      if (redirect_path != NULL) {
+        setup_output_redirect(redirect_path, 1);
+      }
+      execv(full_path, argv);
         perror("execv");
         exit(1);
     } else {
@@ -288,12 +339,36 @@ int main(int argc, char *argv[]) {
 
     if (argc == 0) continue;
 
+    // detect output redirection operators (" > " or "1>") and peel them off argv
+    char *redirect_path = NULL;
+    for (int i = 0; i < argc; i++) {
+      if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], "1>") == 0) {
+        if (i + 1 < argc) {
+          redirect_path = argv[i + 1];
+        }
+        // shift argv to remove operator and path
+        for (int j = i; j + 2 <= argc; j++) {
+          argv[j] = argv[j + 2];
+        }
+        argc -= 2;
+        break;
+      }
+    }
+
     char *cmd_name = argv[0];
     int found = 0;
 
     for (int i = 0; i < num_builtins(); i++) {
       if (strcmp(cmd_name, builtins[i].name) == 0) {
+        // Builtins run in-process, so we temporarily redirect stdout and then restore it.
+        int saved_stdout = -1;
+        if (redirect_path != NULL) {
+          saved_stdout = save_and_redirect_stdout(redirect_path);
+        }
+
         builtins[i].func(argc, argv);
+
+        restore_stdout(saved_stdout);
         found = 1;
         break;
       }
@@ -302,7 +377,7 @@ int main(int argc, char *argv[]) {
     if (!found) {
       char *full_path = ext_check(cmd_name);
       if (full_path != NULL){
-        execute_external_program(full_path, argc, argv);
+        execute_external_program(full_path, argc, argv, redirect_path);
       } else {
         printf("%s: command not found\n", cmd_name);
       }
