@@ -19,10 +19,10 @@ int shell_cd(int argc, char *argv[]);
 int num_builtins();
 void parse_path(char *path_string);
 char* ext_check(char *program_name);
-void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err);
+void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err, int redirect_out_append);
 int parse_command(const char *line, char *argv[], int max_args);
-int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error);
-int save_and_redirect_fd(const char *path, int target_fd);
+int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error, int append_mode);
+int save_and_redirect_fd(const char *path, int target_fd, int append_mode);
 void restore_fd(int saved_fd, int target_fd);
 
 // function signature for a built-in command
@@ -187,8 +187,10 @@ char* ext_check(char *program_name){
 
 // Open file and redirect target_fd to it. Returns 0 on success, -1 on error.
 // If should_exit_on_error is true, exits process on failure (for child processes).
-int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error) {
-  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+// append_mode: 0 -> truncate, 1 -> append.
+int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error, int append_mode) {
+  int flags = O_WRONLY | O_CREAT | (append_mode ? O_APPEND : O_TRUNC);
+  int fd = open(path, flags, 0666);
   if (fd < 0) {
     perror("open");
     if (should_exit_on_error) exit(1);
@@ -205,13 +207,13 @@ int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error)
 }
 
 // Save current target_fd and redirect to file. Returns saved fd or -1 on error.
-int save_and_redirect_fd(const char *path, int target_fd) {
+int save_and_redirect_fd(const char *path, int target_fd, int append_mode) {
   int saved_fd = dup(target_fd);
   if (saved_fd < 0) {
     perror("dup");
     return -1;
   }
-  if (setup_redirect_fd(path, target_fd, 0) < 0) {
+  if (setup_redirect_fd(path, target_fd, 0, append_mode) < 0) {
     close(saved_fd);
     return -1;
   }
@@ -228,7 +230,7 @@ void restore_fd(int saved_fd, int target_fd) {
 
 // Fork/exec an external program, optionally redirecting stdout/stderr.
 // The argv array is already assembled and NULL-terminated here.
-void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err) {
+void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err, int redirect_out_append) {
   // argv already prepared by parse_command; ensure NULL terminator
     argv[argc] = NULL;
 
@@ -239,10 +241,10 @@ void execute_external_program(char *full_path, int argc, char *argv[], char *red
     } else if (pid == 0) {
       // Child: set up redirection before exec so only selected streams are redirected.
       if (redirect_out != NULL) {
-        setup_redirect_fd(redirect_out, STDOUT_FILENO, 1);
+        setup_redirect_fd(redirect_out, STDOUT_FILENO, 1, redirect_out_append);
       }
       if (redirect_err != NULL) {
-        setup_redirect_fd(redirect_err, STDERR_FILENO, 1);
+        setup_redirect_fd(redirect_err, STDERR_FILENO, 1, 0);
       }
       execv(full_path, argv);
         perror("execv");
@@ -342,13 +344,25 @@ int main(int argc, char *argv[]) {
 
     if (argc == 0) continue;
 
-    // detect redirection operators (> / 1> for stdout, 2> for stderr) and peel them off argv
+    // detect redirection operators (> / 1> / >> / 1>> for stdout, 2> for stderr) and peel them off argv
     char *redirect_out = NULL;
     char *redirect_err = NULL;
+    int redirect_out_append = 0;
     for (int i = 0; i < argc; i++) {
       if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], "1>") == 0) {
         if (i + 1 < argc) {
           redirect_out = argv[i + 1];
+          redirect_out_append = 0;
+        }
+        for (int j = i; j + 2 <= argc; j++) {
+          argv[j] = argv[j + 2];
+        }
+        argc -= 2;
+        i -= 1; // re-check current index after shift
+      } else if (strcmp(argv[i], ">>") == 0 || strcmp(argv[i], "1>>") == 0) {
+        if (i + 1 < argc) {
+          redirect_out = argv[i + 1];
+          redirect_out_append = 1;
         }
         for (int j = i; j + 2 <= argc; j++) {
           argv[j] = argv[j + 2];
@@ -376,10 +390,10 @@ int main(int argc, char *argv[]) {
         int saved_stdout = -1;
         int saved_stderr = -1;
         if (redirect_out != NULL) {
-          saved_stdout = save_and_redirect_fd(redirect_out, STDOUT_FILENO);
+          saved_stdout = save_and_redirect_fd(redirect_out, STDOUT_FILENO, redirect_out_append);
         }
         if (redirect_err != NULL) {
-          saved_stderr = save_and_redirect_fd(redirect_err, STDERR_FILENO);
+          saved_stderr = save_and_redirect_fd(redirect_err, STDERR_FILENO, 0);
         }
 
         builtins[i].func(argc, argv);
@@ -394,7 +408,7 @@ int main(int argc, char *argv[]) {
     if (!found) {
       char *full_path = ext_check(cmd_name);
       if (full_path != NULL){
-        execute_external_program(full_path, argc, argv, redirect_out, redirect_err);
+        execute_external_program(full_path, argc, argv, redirect_out, redirect_err, redirect_out_append);
       } else {
         printf("%s: command not found\n", cmd_name);
       }
