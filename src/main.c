@@ -276,44 +276,65 @@ char* ext_check(char *program_name){
 }
 
 // Helper for Tab Completion
-const char* complete_builtin(const char *prefix) {
-  if (prefix == NULL) return NULL;
-  size_t n = strlen(prefix);
-  if (n == 0) return NULL;
-  
-  // Checks if input is a substring of known commands
-  if (strncmp("echo", prefix, n) == 0) return "echo";
-  if (strncmp("exit", prefix, n) == 0) return "exit";
-  if (strncmp("type", prefix, n) == 0) return "type";
-  return NULL;
+int compare_strings(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
 }
 
-char* complete_executable(const char *prefix) {
-  if (prefix == NULL || strlen(prefix) == 0) return NULL;
-  size_t prefix_len = strlen(prefix);
-  static char match[256]; 
+int get_completions(const char *prefix, char ***out_matches) {
+    size_t prefix_len = strlen(prefix);
+    if (prefix_len == 0) return 0;
 
-  for (int i = 0; i < path_count; i++) {
-    DIR *d = opendir(path_dirs[i]);
-    if (d == NULL) continue;
+    int capacity = 10;
+    int count = 0;
+    char **matches = malloc(capacity * sizeof(char *));
 
-    struct dirent *dir;
-    while ((dir = readdir(d)) != NULL) {
-      if (strncmp(dir->d_name, prefix, prefix_len) == 0) {
-        char full_path[1024];
-        snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], dir->d_name);
-        
-        if (access(full_path, X_OK) == 0) {
-          strncpy(match, dir->d_name, sizeof(match) - 1);
-          match[sizeof(match) - 1] = '\0';
-          closedir(d);
-          return match;
+    // Builtins
+    for (int i = 0; i < num_builtins(); i++) {
+        if (strncmp(builtins[i].name, prefix, prefix_len) == 0) {
+            if (count >= capacity) {
+                capacity *= 2;
+                matches = realloc(matches, capacity * sizeof(char *));
+            }
+            matches[count++] = strdup(builtins[i].name);
         }
-      }
     }
-    closedir(d);
-  }
-  return NULL;
+
+    // Executables
+    for (int i = 0; i < path_count; i++) {
+        DIR *d = opendir(path_dirs[i]);
+        if (d == NULL) continue;
+
+        struct dirent *dir;
+        while ((dir = readdir(d)) != NULL) {
+            if (strncmp(dir->d_name, prefix, prefix_len) == 0) {
+                char full_path[1024];
+                snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], dir->d_name);
+                
+                if (access(full_path, X_OK) == 0) {
+                    // Check duplicates
+                    int exists = 0;
+                    for (int j = 0; j < count; j++) {
+                        if (strcmp(matches[j], dir->d_name) == 0) {
+                            exists = 1;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        if (count >= capacity) {
+                            capacity *= 2;
+                            matches = realloc(matches, capacity * sizeof(char *));
+                        }
+                        matches[count++] = strdup(dir->d_name);
+                    }
+                }
+            }
+        }
+        closedir(d);
+    }
+
+    qsort(matches, count, sizeof(char *), compare_strings);
+    *out_matches = matches;
+    return count;
 }
 
 // ================================================================================
@@ -504,6 +525,7 @@ int parse_command(const char *line, char *argv[], int max_args) {
  */
 int read_input_line(char *buffer, size_t size) {
   size_t len = 0;
+  int tab_count = 0; // Track consecutive tabs
   memset(buffer, 0, size);
 
   while (1) {
@@ -540,33 +562,58 @@ int read_input_line(char *buffer, size_t size) {
       }
       prefix[i] = '\0';
 
-      // 2. Check for match in built-ins
-      const char *comp = complete_builtin(prefix);
-      if (comp == NULL) {
-        comp = complete_executable(prefix);
-      }
-      
-      if (comp != NULL) {
-        size_t prefix_len = strlen(prefix);
-        size_t comp_len = strlen(comp);
-        
-        // Append the missing part of the command
-        if (len + (comp_len - prefix_len) + 1 < size) {
-            printf("%s ", comp + prefix_len); // Visual update
-            fflush(stdout);
+      char **matches = NULL;
+      int match_count = get_completions(prefix, &matches);
 
-            // Buffer update
-            strcpy(buffer + len, comp + prefix_len);
-            len += (comp_len - prefix_len);
-            buffer[len++] = ' ';
-            buffer[len] = '\0';
-        }
+      if (match_count == 0) {
+          printf("\a"); // Bell sound
+          fflush(stdout);
+          tab_count = 0;
+      } else if (match_count == 1) {
+          // Autocomplete
+          size_t prefix_len = strlen(prefix);
+          size_t comp_len = strlen(matches[0]);
+          
+          if (len + (comp_len - prefix_len) + 1 < size) {
+              printf("%s ", matches[0] + prefix_len); // Visual update
+              fflush(stdout);
+
+              // Buffer update
+              strcpy(buffer + len, matches[0] + prefix_len);
+              len += (comp_len - prefix_len);
+              buffer[len++] = ' ';
+              buffer[len] = '\0';
+          }
+          tab_count = 0;
       } else {
-        printf("\a"); // Bell sound (System beep) if no match
-        fflush(stdout);
+          // Multiple matches
+          if (tab_count == 0) {
+              printf("\a"); // Bell sound
+              fflush(stdout);
+              tab_count = 1;
+          } else {
+              printf("\n");
+              for (int j = 0; j < match_count; j++) {
+                  printf("%s  ", matches[j]);
+              }
+              printf("\n");
+              printf("$ %s", buffer); // Reprint prompt and buffer
+              fflush(stdout);
+              tab_count = 0;
+          }
       }
+
+      // Free matches
+      for (int j = 0; j < match_count; j++) {
+          free(matches[j]);
+      }
+      free(matches);
+      
       continue;
     }
+
+    // Reset tab count for any other key
+    tab_count = 0;
 
     // === BACKSPACE HANDLING ===
     // 127 is Standard DEL, \b is used in some terminals.
