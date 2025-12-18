@@ -5,25 +5,45 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <termios.h>  // Required for raw mode
 
 #define MAX_PATH_ENTRIES 100
 #define MAX_ARGS 100
 
 // Forward declarations
+int shell_cd(int argc, char *argv[]);
+int shell_pwd(int argc, char *argv[]);
 int shell_exit(int argc, char *argv[]);
 int shell_echo(int argc, char *argv[]);
 int shell_help(int argc, char *argv[]);
 int shell_type(int argc, char *argv[]);
-int shell_pwd(int argc, char *argv[]);
-int shell_cd(int argc, char *argv[]);
 int num_builtins();
-void parse_path(char *path_string);
-char* ext_check(char *program_name);
-void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err, int redirect_out_append, int redirect_err_append);
 int parse_command(const char *line, char *argv[], int max_args);
 int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error, int append_mode);
 int save_and_redirect_fd(const char *path, int target_fd, int append_mode);
+int read_input_line(char *buffer, size_t size);
+char* ext_check(char *program_name);
+const char* complete_builtin(const char *prefix);
+void parse_path(char *path_string);
+void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err, int redirect_out_append, int redirect_err_append);
 void restore_fd(int saved_fd, int target_fd);
+
+// Terminal mode handling
+struct termios original_termios;
+
+void disable_raw_mode() {
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_termios);
+}
+
+void enable_raw_mode() {
+  tcgetattr(STDIN_FILENO, &original_termios);
+  atexit(disable_raw_mode);
+  
+  struct termios raw = original_termios;
+  // Disable ICANON (canonical mode) and ECHO (automatic echoing)
+  raw.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
 
 // function signature for a built-in command
 typedef int (*builtin_func)(int argc, char *argv[]);
@@ -51,7 +71,7 @@ int path_count = 0;
 // exit function
 int shell_exit(int argc, char *argv[]) {
   exit(0);
-  return 0; // unreachable, but satisfies compiler
+  return 0; 
 }
 
 int shell_echo(int argc, char *argv[]) {
@@ -62,7 +82,7 @@ int shell_echo(int argc, char *argv[]) {
     }
   }
   printf("\n");
-  return 1; // 1 to signal "continue running"
+  return 1; 
 }
 
 int shell_type(int argc, char *argv[]) {
@@ -94,7 +114,7 @@ int shell_type(int argc, char *argv[]) {
       }
     }
   }
-  return 1; // continue running the shell
+  return 1; 
 }
 
 int shell_help(int argc, char *argv[]) {
@@ -144,10 +164,9 @@ int shell_cd(int argc, char *argv[]){
     fprintf(stderr, "cd: %s: No such file or directory\n", arg);
   }
 
-  return 1; // continue running the shell
+  return 1; 
 }
 
-// returns the number of built-in commands in the shell
 int num_builtins() {
   return sizeof(builtins) / sizeof(struct builtin);
 }
@@ -155,17 +174,15 @@ int num_builtins() {
 void parse_path(char *path_string) {
     if (path_string == NULL) return;
     
-  // duplicate the string because strtok modifies it
     char *path_copy = strdup(path_string);
     if (!path_copy) {
         perror("strdup");
         return;
     }
     
-    // Tokenize by ':'
     char *dir = strtok(path_copy, ":");
     while (dir != NULL && path_count < MAX_PATH_ENTRIES) {
-        path_dirs[path_count] = strdup(dir);  // Store each directory
+        path_dirs[path_count] = strdup(dir);  
         path_count++;
         dir = strtok(NULL, ":");
     }
@@ -175,7 +192,6 @@ void parse_path(char *path_string) {
 
 char* ext_check(char *program_name){
   for (int i = 0; i < path_count; i++){
-    // appending program name to dir path
     static char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], program_name);
     if (access(full_path, F_OK) == 0 && access(full_path, X_OK) == 0){
@@ -185,9 +201,16 @@ char* ext_check(char *program_name){
   return NULL;
 }
 
-// Open file and redirect target_fd to it. Returns 0 on success, -1 on error.
-// If should_exit_on_error is true, exits process on failure (for child processes).
-// append_mode: 0 -> truncate, 1 -> append.
+const char* complete_builtin(const char *prefix) {
+  if (prefix == NULL) return NULL;
+  size_t n = strlen(prefix);
+  if (n == 0) return NULL;
+  if (strncmp("echo", prefix, n) == 0) return "echo";
+  if (strncmp("exit", prefix, n) == 0) return "exit";
+  if (strncmp("type", prefix, n) == 0) return "type";
+  return NULL;
+}
+
 int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error, int append_mode) {
   int flags = O_WRONLY | O_CREAT | (append_mode ? O_APPEND : O_TRUNC);
   int fd = open(path, flags, 0666);
@@ -206,7 +229,6 @@ int setup_redirect_fd(const char *path, int target_fd, int should_exit_on_error,
   return 0;
 }
 
-// Save current target_fd and redirect to file. Returns saved fd or -1 on error.
 int save_and_redirect_fd(const char *path, int target_fd, int append_mode) {
   int saved_fd = dup(target_fd);
   if (saved_fd < 0) {
@@ -220,7 +242,6 @@ int save_and_redirect_fd(const char *path, int target_fd, int append_mode) {
   return saved_fd;
 }
 
-// Restore target_fd from saved file descriptor.
 void restore_fd(int saved_fd, int target_fd) {
   if (saved_fd != -1) {
     dup2(saved_fd, target_fd);
@@ -228,10 +249,7 @@ void restore_fd(int saved_fd, int target_fd) {
   }
 }
 
-// Fork/exec an external program, optionally redirecting stdout/stderr.
-// The argv array is already assembled and NULL-terminated here.
 void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err, int redirect_out_append, int redirect_err_append) {
-  // argv already prepared by parse_command; ensure NULL terminator
     argv[argc] = NULL;
 
     pid_t pid = fork();
@@ -239,7 +257,6 @@ void execute_external_program(char *full_path, int argc, char *argv[], char *red
         perror("fork");
         return;
     } else if (pid == 0) {
-      // Child: set up redirection before exec so only selected streams are redirected.
       if (redirect_out != NULL) {
         setup_redirect_fd(redirect_out, STDOUT_FILENO, 1, redirect_out_append);
       }
@@ -265,7 +282,6 @@ int parse_command(const char *line, char *argv[], int max_args) {
   for (const char *p = line;; p++) {
     char c = *p;
 
-    // toggle quote modes; each quote type is ignored while inside the other
     if (!in_double_quote && c == '\'') {
       in_single_quote = !in_single_quote;
       continue;
@@ -276,7 +292,6 @@ int parse_command(const char *line, char *argv[], int max_args) {
       continue;
     }
 
-    // outside quotes, whitespace ends the current token
     if ((c == '\0') || (!in_single_quote && !in_double_quote && isspace((unsigned char)c))) {
       if (len > 0) {
         token[len] = '\0';
@@ -289,14 +304,12 @@ int parse_command(const char *line, char *argv[], int max_args) {
       continue;
     }
 
-    /* backslash handling inside double quotes: escape only " and \ */
     if (in_double_quote && c == '\\') {
       char next = *(++p);
-      if (next == '\0') break; // nothing to escape at end
+      if (next == '\0') break; 
       if (next == '"' || next == '\\') {
-        c = next; // consume backslash, keep escaped char
+        c = next; 
       } else {
-        // backslash is literal for other chars; keep both
         if (len < (int)sizeof(token) - 1) {
           token[len++] = '\\';
         }
@@ -304,10 +317,9 @@ int parse_command(const char *line, char *argv[], int max_args) {
       }
     }
 
-    // backslash outside quotes escapes the next character (including whitespace)
     if (!in_single_quote && !in_double_quote && c == '\\') {
       char next = *(++p);
-      if (next == '\0') break; // nothing to escape at end of line
+      if (next == '\0') break;
       c = next;
     }
 
@@ -321,34 +333,38 @@ int parse_command(const char *line, char *argv[], int max_args) {
 }
 
 int main(int argc, char *argv[]) {
+  // 1. Enable Raw Mode for handling TAB keys
+  if (isatty(STDIN_FILENO)) {
+      enable_raw_mode();
+  }
+  
   setbuf(stdout, NULL);
 
-  // read PATH at startup
   char *shell_path = getenv("PATH");
   if (shell_path == NULL) {
     fprintf(stderr, "Warning: PATH not set\n");
   } else {
-    parse_path(shell_path);  // Parse it into array
+    parse_path(shell_path); 
   }
 
   char command[1024];
 
   while (1) {
     printf("$ ");
-    if (!fgets(command, sizeof(command), stdin)) break;
     
-    command[strcspn(command, "\n")] = '\0';
-
+    // read_input_line now handles raw input and returns 1 if a command was entered, 0 on EOF
+    if (read_input_line(command, sizeof(command)) == 0) break;
+    
     char *argv[MAX_ARGS];
     int argc = parse_command(command, argv, MAX_ARGS);
 
     if (argc == 0) continue;
 
-    // detect redirection operators (> / 1> / >> / 1>> for stdout, 2> / 2>> for stderr) and peel them off argv
     char *redirect_out = NULL;
     char *redirect_err = NULL;
     int redirect_out_append = 0;
     int redirect_err_append = 0;
+    
     for (int i = 0; i < argc; i++) {
       if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], "1>") == 0) {
         if (i + 1 < argc) {
@@ -359,7 +375,7 @@ int main(int argc, char *argv[]) {
           argv[j] = argv[j + 2];
         }
         argc -= 2;
-        i -= 1; // re-check current index after shift
+        i -= 1; 
       } else if (strcmp(argv[i], ">>") == 0 || strcmp(argv[i], "1>>") == 0) {
         if (i + 1 < argc) {
           redirect_out = argv[i + 1];
@@ -369,7 +385,7 @@ int main(int argc, char *argv[]) {
           argv[j] = argv[j + 2];
         }
         argc -= 2;
-        i -= 1; // re-check current index after shift
+        i -= 1; 
       } else if (strcmp(argv[i], "2>") == 0) {
         if (i + 1 < argc) {
           redirect_err = argv[i + 1];
@@ -379,7 +395,7 @@ int main(int argc, char *argv[]) {
           argv[j] = argv[j + 2];
         }
         argc -= 2;
-        i -= 1; // re-check current index after shift
+        i -= 1; 
       } else if (strcmp(argv[i], "2>>") == 0) {
         if (i + 1 < argc) {
           redirect_err = argv[i + 1];
@@ -389,7 +405,7 @@ int main(int argc, char *argv[]) {
           argv[j] = argv[j + 2];
         }
         argc -= 2;
-        i -= 1; // re-check current index after shift
+        i -= 1; 
       }
     }
 
@@ -398,7 +414,6 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < num_builtins(); i++) {
       if (strcmp(cmd_name, builtins[i].name) == 0) {
-        // Builtins run in-process, so we temporarily redirect stdout and then restore it.
         int saved_stdout = -1;
         int saved_stderr = -1;
         if (redirect_out != NULL) {
@@ -426,10 +441,98 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    // free tokens allocated by parse_command
     for (int i = 0; i < argc; i++) {
       free(argv[i]);
     }
   }
   return 0;
+}
+
+// Updated function to handle Raw Mode input
+int read_input_line(char *buffer, size_t size) {
+  size_t len = 0;
+  memset(buffer, 0, size);
+
+  while (1) {
+    char c;
+    // Read 1 byte from standard input
+    if (read(STDIN_FILENO, &c, 1) != 1) break; 
+
+    // Handle Ctrl+D (EOF)
+    if (c == 4) { 
+        if (len == 0) return 0; 
+        break; 
+    }
+    
+    // Handle Enter/Return
+    if (c == '\n' || c == '\r') {
+      printf("\n"); // Move to new line visually
+      buffer[len] = '\0';
+      return 1;
+    }
+
+    // Handle TAB for Autocomplete
+    if (c == '\t') {
+      // 1. Extract the current token/prefix from the buffer
+      int start = 0;
+      while (start < len && (buffer[start] == ' ' || buffer[start] == '\t')) {
+        start++;
+      }
+      
+      char prefix[128];
+      int i = 0;
+      while (start + i < len && !isspace((unsigned char)buffer[start + i]) && i < (int)sizeof(prefix) - 1) {
+        prefix[i] = buffer[start + i];
+        i++;
+      }
+      prefix[i] = '\0';
+
+      // 2. Check for match
+      const char *comp = complete_builtin(prefix);
+      
+      if (comp != NULL) {
+        size_t prefix_len = strlen(prefix);
+        size_t comp_len = strlen(comp);
+        
+        if (len + (comp_len - prefix_len) + 1 < size) {
+            // Print only the suffix and a space
+            printf("%s ", comp + prefix_len);
+            fflush(stdout);
+
+            // Update buffer
+            strcpy(buffer + len, comp + prefix_len);
+            len += (comp_len - prefix_len);
+            buffer[len++] = ' ';
+            buffer[len] = '\0';
+        }
+      } else {
+        printf("\a"); // Bell
+        fflush(stdout);
+      }
+      continue;
+    }
+
+    // Handle Backspace (127 is standard DEL, \b is sometimes used)
+    if (c == 127 || c == '\b') {
+      if (len > 0) {
+        len--;
+        buffer[len] = '\0';
+        // Erase character from terminal: Move back, print space, move back
+        printf("\b \b");
+        fflush(stdout);
+      }
+      continue;
+    }
+
+    // Handle Normal Characters
+    if (len < size - 1) {
+      // Ignore other control characters
+      if (iscntrl(c)) continue; 
+      
+      buffer[len++] = c;
+      printf("%c", c); // Echo character back to user
+      fflush(stdout);
+    }
+  }
+  return 1;
 }
