@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <termios.h>  // Required for raw mode (terminal settings)
+#include <dirent.h>
 
 #define MAX_PATH_ENTRIES 100
 #define MAX_ARGS 100
@@ -43,6 +44,7 @@ int save_and_redirect_fd(const char *path, int target_fd, int append_mode);
 int read_input_line(char *buffer, size_t size);
 char* ext_check(char *program_name);
 const char* complete_builtin(const char *prefix);
+char* complete_executable(const char *prefix);
 void parse_path(char *path_string);
 void execute_external_program(char *full_path, int argc, char *argv[], char *redirect_out, char *redirect_err, int redirect_out_append, int redirect_err_append);
 void restore_fd(int saved_fd, int target_fd);
@@ -286,6 +288,34 @@ const char* complete_builtin(const char *prefix) {
   return NULL;
 }
 
+char* complete_executable(const char *prefix) {
+  if (prefix == NULL || strlen(prefix) == 0) return NULL;
+  size_t prefix_len = strlen(prefix);
+  static char match[256]; 
+
+  for (int i = 0; i < path_count; i++) {
+    DIR *d = opendir(path_dirs[i]);
+    if (d == NULL) continue;
+
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) {
+      if (strncmp(dir->d_name, prefix, prefix_len) == 0) {
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", path_dirs[i], dir->d_name);
+        
+        if (access(full_path, X_OK) == 0) {
+          strncpy(match, dir->d_name, sizeof(match) - 1);
+          match[sizeof(match) - 1] = '\0';
+          closedir(d);
+          return match;
+        }
+      }
+    }
+    closedir(d);
+  }
+  return NULL;
+}
+
 // ================================================================================
 // FILE DESCRIPTOR MANIPULATION (REDIRECTION)
 // ================================================================================
@@ -512,6 +542,9 @@ int read_input_line(char *buffer, size_t size) {
 
       // 2. Check for match in built-ins
       const char *comp = complete_builtin(prefix);
+      if (comp == NULL) {
+        comp = complete_executable(prefix);
+      }
       
       if (comp != NULL) {
         size_t prefix_len = strlen(prefix);
