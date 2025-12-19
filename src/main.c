@@ -520,6 +520,28 @@ int parse_command(const char *line, char *argv[], int max_args) {
 // RAW INPUT HANDLER
 // ================================================================================
 
+/*
+ * Finds the longest common prefix among a list of strings.
+ * Returns a newly allocated string that must be freed by the caller.
+ */
+char *find_lcp(char **matches, int count) {
+    if (count == 0) return NULL;
+    if (count == 1) return strdup(matches[0]);
+    
+    char *prefix = strdup(matches[0]);
+    int len = strlen(prefix);
+    
+    for (int i = 1; i < count; i++) {
+        int j = 0;
+        while (j < len && matches[i][j] != '\0' && prefix[j] == matches[i][j]) {
+            j++;
+        }
+        len = j;
+        prefix[len] = '\0';
+    }
+    return prefix;
+}
+
 /* * Reads input byte-by-byte to handle specialized keys (TAB, Backspace).
  * Returns 1 if command entered, 0 on EOF (Ctrl+D).
  */
@@ -587,20 +609,36 @@ int read_input_line(char *buffer, size_t size) {
           tab_count = 0;
       } else {
           // Multiple matches
-          if (tab_count == 0) {
-              printf("\a"); // Bell sound
-              fflush(stdout);
-              tab_count = 1;
-          } else {
-              printf("\n");
-              for (int j = 0; j < match_count; j++) {
-                  printf("%s  ", matches[j]);
+          char *lcp = find_lcp(matches, match_count);
+          size_t prefix_len = strlen(prefix);
+          size_t lcp_len = strlen(lcp);
+
+          if (lcp_len > prefix_len) {
+              if (len + (lcp_len - prefix_len) < size) {
+                  printf("%s", lcp + prefix_len);
+                  fflush(stdout);
+                  strcpy(buffer + len, lcp + prefix_len);
+                  len += (lcp_len - prefix_len);
+                  buffer[len] = '\0';
               }
-              printf("\n");
-              printf("$ %s", buffer); // Reprint prompt and buffer
-              fflush(stdout);
               tab_count = 0;
+          } else {
+              if (tab_count == 0) {
+                  printf("\a"); // Bell sound
+                  fflush(stdout);
+                  tab_count = 1;
+              } else {
+                  printf("\n");
+                  for (int j = 0; j < match_count; j++) {
+                      printf("%s  ", matches[j]);
+                  }
+                  printf("\n");
+                  printf("$ %s", buffer); // Reprint prompt and buffer
+                  fflush(stdout);
+                  tab_count = 0;
+              }
           }
+          free(lcp);
       }
 
       // Free matches
