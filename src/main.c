@@ -523,6 +523,11 @@ int parse_command(const char *line, char *argv[], int max_args) {
 /*
  * Finds the longest common prefix among a list of strings.
  * Returns a newly allocated string that must be freed by the caller.
+ * 
+ * Logic:
+ * 1. Start with the first string as the candidate prefix.
+ * 2. Iterate through the rest of the strings.
+ * 3. For each string, shorten the candidate prefix until it matches the start of the string.
  */
 char *find_lcp(char **matches, int count) {
     if (count == 0) return NULL;
@@ -533,11 +538,12 @@ char *find_lcp(char **matches, int count) {
     
     for (int i = 1; i < count; i++) {
         int j = 0;
+        // Compare characters until mismatch or end of string
         while (j < len && matches[i][j] != '\0' && prefix[j] == matches[i][j]) {
             j++;
         }
-        len = j;
-        prefix[len] = '\0';
+        len = j; // Update length of common prefix
+        prefix[len] = '\0'; // Terminate string at new length
     }
     return prefix;
 }
@@ -608,21 +614,30 @@ int read_input_line(char *buffer, size_t size) {
           }
           tab_count = 0;
       } else {
-          // Multiple matches
+          // Multiple matches found
+          // Calculate the Longest Common Prefix (LCP) of all matches
           char *lcp = find_lcp(matches, match_count);
           size_t prefix_len = strlen(prefix);
           size_t lcp_len = strlen(lcp);
 
+          // If the LCP is longer than what the user has typed so far,
+          // we can auto-complete up to the LCP.
           if (lcp_len > prefix_len) {
               if (len + (lcp_len - prefix_len) < size) {
-                  printf("%s", lcp + prefix_len);
+                  printf("%s", lcp + prefix_len); // Print only the new characters
                   fflush(stdout);
+                  
+                  // Append new characters to the buffer
                   strcpy(buffer + len, lcp + prefix_len);
                   len += (lcp_len - prefix_len);
                   buffer[len] = '\0';
               }
-              tab_count = 0;
+              tab_count = 0; // Reset tab count so next tab triggers list
           } else {
+              // If we can't extend the prefix (LCP == current input),
+              // behave like standard shell:
+              // 1st Tab: Bell
+              // 2nd Tab: List all matches
               if (tab_count == 0) {
                   printf("\a"); // Bell sound
                   fflush(stdout);
@@ -679,6 +694,171 @@ int read_input_line(char *buffer, size_t size) {
 }
 
 // ================================================================================
+// PIPELINE & REDIRECTION HELPERS
+// ================================================================================
+
+/*
+ * Scans the argument list for redirection operators (>, >>, 2>, 2>>).
+ * Extracts the target filename and sets the appropriate flags.
+ * Removes the operator and filename from argv by shifting remaining arguments.
+ */
+void parse_redirections(int *argc_ptr, char *argv[], char **redirect_out, char **redirect_err, int *redirect_out_append, int *redirect_err_append) {
+    int argc = *argc_ptr;
+    *redirect_out = NULL;
+    *redirect_err = NULL;
+    *redirect_out_append = 0;
+    *redirect_err_append = 0;
+    
+    for (int i = 0; i < argc; i++) {
+      int remove_count = 0;
+      // Check for Standard Output Redirection
+      if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], "1>") == 0) {
+        if (i + 1 < argc) {
+          *redirect_out = argv[i + 1];
+          *redirect_out_append = 0; // Truncate mode
+          remove_count = 2;
+        }
+      } 
+      // Check for Append Standard Output
+      else if (strcmp(argv[i], ">>") == 0 || strcmp(argv[i], "1>>") == 0) {
+        if (i + 1 < argc) {
+          *redirect_out = argv[i + 1];
+          *redirect_out_append = 1; // Append mode
+          remove_count = 2;
+        }
+      } 
+      // Check for Standard Error Redirection
+      else if (strcmp(argv[i], "2>") == 0) {
+        if (i + 1 < argc) {
+          *redirect_err = argv[i + 1];
+          *redirect_err_append = 0;
+          remove_count = 2;
+        }
+      } 
+      // Check for Append Standard Error
+      else if (strcmp(argv[i], "2>>") == 0) {
+        if (i + 1 < argc) {
+          *redirect_err = argv[i + 1];
+          *redirect_err_append = 1;
+          remove_count = 2;
+        }
+      }
+
+      // If a redirection was found, remove the operator and filename from argv
+      if (remove_count > 0) {
+          free(argv[i]); // Free the operator string
+          // Shift remaining arguments left to fill the gap
+          for (int j = i; j + remove_count <= argc; j++) {
+              argv[j] = argv[j + remove_count];
+          }
+          argc -= remove_count;
+          i -= 1; // Decrement i to re-check the new argument at this position
+      }
+    }
+    *argc_ptr = argc; // Update the caller's argc
+}
+
+/*
+ * Executes two commands connected by a pipe (|).
+ * 1. Parses redirections for both commands.
+ * 2. Creates a pipe.
+ * 3. Forks two child processes.
+ * 4. Connects stdout of Child 1 to the write end of the pipe.
+ * 5. Connects stdin of Child 2 to the read end of the pipe.
+ */
+void run_pipeline(int argc1, char *argv1[], int argc2, char *argv2[]) {
+    char *out1=NULL, *err1=NULL, *out2=NULL, *err2=NULL;
+    int out1_app=0, err1_app=0, out2_app=0, err2_app=0;
+    
+    // Parse redirections for both commands independently
+    parse_redirections(&argc1, argv1, &out1, &err1, &out1_app, &err1_app);
+    parse_redirections(&argc2, argv2, &out2, &err2, &out2_app, &err2_app);
+
+    // Resolve full paths for executables
+    char *path1_static = ext_check(argv1[0]);
+    char *path1 = path1_static ? strdup(path1_static) : NULL;
+    
+    char *path2_static = ext_check(argv2[0]);
+    char *path2 = path2_static ? strdup(path2_static) : NULL;
+    
+    // Error handling if commands are not found
+    if (!path1) { 
+        printf("%s: command not found\n", argv1[0]); 
+        if(path2) free(path2); 
+        if(out1) free(out1); if(err1) free(err1);
+        if(out2) free(out2); if(err2) free(err2);
+        return; 
+    }
+    if (!path2) { 
+        printf("%s: command not found\n", argv2[0]); 
+        if(path1) free(path1); 
+        if(out1) free(out1); if(err1) free(err1);
+        if(out2) free(out2); if(err2) free(err2);
+        return; 
+    }
+
+    // Create the pipe
+    // pipefd[0] is for reading, pipefd[1] is for writing
+    int pipefd[2];
+    if (pipe(pipefd) < 0) { 
+        perror("pipe"); 
+        free(path1); free(path2); 
+        if(out1) free(out1); if(err1) free(err1);
+        if(out2) free(out2); if(err2) free(err2);
+        return; 
+    }
+
+    // Fork first child (Command 1)
+    pid_t pid1 = fork();
+    if (pid1 == 0) {
+        // === CHILD 1 ===
+        close(pipefd[0]); // Close unused read end
+        dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
+        close(pipefd[1]); // Close original write end after dup
+        
+        // Handle other redirections (stderr)
+        if (err1) setup_redirect_fd(err1, STDERR_FILENO, 1, err1_app);
+        
+        execv(path1, argv1);
+        perror("execv");
+        exit(1);
+    }
+
+    // Fork second child (Command 2)
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        // === CHILD 2 ===
+        close(pipefd[1]); // Close unused write end
+        dup2(pipefd[0], STDIN_FILENO); // Redirect stdin to pipe read end
+        close(pipefd[0]); // Close original read end after dup
+
+        // Handle other redirections (stdout, stderr)
+        if (out2) setup_redirect_fd(out2, STDOUT_FILENO, 1, out2_app);
+        if (err2) setup_redirect_fd(err2, STDERR_FILENO, 1, err2_app);
+
+        execv(path2, argv2);
+        perror("execv");
+        exit(1);
+    }
+
+    // === PARENT PROCESS ===
+    // Close both ends of the pipe in the parent
+    // If we don't close them, the children might hang waiting for EOF
+    close(pipefd[0]);
+    close(pipefd[1]);
+    
+    // Wait for both children to finish
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+    
+    // Cleanup
+    free(path1);
+    free(path2);
+    if(out1) free(out1); if(err1) free(err1);
+    if(out2) free(out2); if(err2) free(err2);
+}
+
+// ================================================================================
 // MAIN ENTRY POINT
 // ================================================================================
 
@@ -713,102 +893,84 @@ int main(int argc, char *argv[]) {
 
     if (argc == 0) continue; // Empty input
 
-    // --- Redirection Parsing ---
-    // We scan the arguments for >, >>, 2>, 2>>.
-    // If found, we extract the filename, set flags, and remove those tokens from argv.
-    char *redirect_out = NULL;
-    char *redirect_err = NULL;
-    int redirect_out_append = 0;
-    int redirect_err_append = 0;
-    
+    // --- PIPELINE DETECTION ---
+    // Scan for the pipe operator "|"
+    int pipe_idx = -1;
     for (int i = 0; i < argc; i++) {
-      // Standard Output Redirection (> or 1>)
-      if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], "1>") == 0) {
-        if (i + 1 < argc) {
-          redirect_out = argv[i + 1];
-          redirect_out_append = 0; // Truncate mode
+        if (strcmp(argv[i], "|") == 0) {
+            pipe_idx = i;
+            break;
         }
-        // Shift remaining arguments left to remove ">" and "filename"
-        for (int j = i; j + 2 <= argc; j++) {
-          argv[j] = argv[j + 2];
-        }
-        argc -= 2;
-        i -= 1; 
-      } 
-      // Append Standard Output (>> or 1>>)
-      else if (strcmp(argv[i], ">>") == 0 || strcmp(argv[i], "1>>") == 0) {
-        if (i + 1 < argc) {
-          redirect_out = argv[i + 1];
-          redirect_out_append = 1; // Append mode
-        }
-        for (int j = i; j + 2 <= argc; j++) {
-          argv[j] = argv[j + 2];
-        }
-        argc -= 2;
-        i -= 1; 
-      } 
-      // Standard Error Redirection (2>)
-      else if (strcmp(argv[i], "2>") == 0) {
-        if (i + 1 < argc) {
-          redirect_err = argv[i + 1];
-          redirect_err_append = 0;
-        }
-        for (int j = i; j + 2 <= argc; j++) {
-          argv[j] = argv[j + 2];
-        }
-        argc -= 2;
-        i -= 1; 
-      } 
-      // Append Standard Error (2>>)
-      else if (strcmp(argv[i], "2>>") == 0) {
-        if (i + 1 < argc) {
-          redirect_err = argv[i + 1];
-          redirect_err_append = 1;
-        }
-        for (int j = i; j + 2 <= argc; j++) {
-          argv[j] = argv[j + 2];
-        }
-        argc -= 2;
-        i -= 1; 
-      }
     }
 
-    char *cmd_name = argv[0];
-    int found = 0;
-
-    // 1. Try to execute as Built-in
-    for (int i = 0; i < num_builtins(); i++) {
-      if (strcmp(cmd_name, builtins[i].name) == 0) {
-        int saved_stdout = -1;
-        int saved_stderr = -1;
+    if (pipe_idx != -1) {
+        // === PIPELINE EXECUTION ===
+        // Split the argument list into two parts at the pipe operator
         
-        // If redirection was requested, swap FDs before running the function
-        if (redirect_out != NULL) {
-          saved_stdout = save_and_redirect_fd(redirect_out, STDOUT_FILENO, redirect_out_append);
+        free(argv[pipe_idx]); // Free the "|" string
+        argv[pipe_idx] = NULL; // Terminate the first command's argument list
+        
+        // Command 1: argv[0] ... argv[pipe_idx-1]
+        char **argv1 = argv;
+        int argc1 = pipe_idx;
+        
+        // Command 2: argv[pipe_idx+1] ... argv[argc-1]
+        char **argv2 = &argv[pipe_idx + 1];
+        int argc2 = argc - (pipe_idx + 1);
+        
+        if (argc1 > 0 && argc2 > 0) {
+            run_pipeline(argc1, argv1, argc2, argv2);
+        } else {
+            fprintf(stderr, "Invalid pipeline\n");
         }
-        if (redirect_err != NULL) {
-          saved_stderr = save_and_redirect_fd(redirect_err, STDERR_FILENO, redirect_err_append);
+    } else {
+        // === NORMAL EXECUTION ===
+        // Handle single command (Built-in or External) with optional redirection
+        
+        char *redirect_out = NULL;
+        char *redirect_err = NULL;
+        int redirect_out_append = 0;
+        int redirect_err_append = 0;
+        
+        parse_redirections(&argc, argv, &redirect_out, &redirect_err, &redirect_out_append, &redirect_err_append);
+        
+        char *cmd_name = argv[0];
+        int found = 0;
+
+        // 1. Try to execute as Built-in
+        for (int i = 0; i < num_builtins(); i++) {
+          if (strcmp(cmd_name, builtins[i].name) == 0) {
+            int saved_stdout = -1;
+            int saved_stderr = -1;
+            
+            if (redirect_out != NULL) {
+              saved_stdout = save_and_redirect_fd(redirect_out, STDOUT_FILENO, redirect_out_append);
+            }
+            if (redirect_err != NULL) {
+              saved_stderr = save_and_redirect_fd(redirect_err, STDERR_FILENO, redirect_err_append);
+            }
+
+            builtins[i].func(argc, argv);
+
+            restore_fd(saved_stdout, STDOUT_FILENO);
+            restore_fd(saved_stderr, STDERR_FILENO);
+            found = 1;
+            break;
+          }
         }
 
-        builtins[i].func(argc, argv);
-
-        // Swap FDs back to terminal so the prompt prints correctly
-        restore_fd(saved_stdout, STDOUT_FILENO);
-        restore_fd(saved_stderr, STDERR_FILENO);
-        found = 1;
-        break;
-      }
-    }
-
-    // 2. Try to execute as External Program
-    if (!found) {
-      char *full_path = ext_check(cmd_name);
-      if (full_path != NULL){
-        // External programs handle redirection inside the child process (in execute_external_program)
-        execute_external_program(full_path, argc, argv, redirect_out, redirect_err, redirect_out_append, redirect_err_append);
-      } else {
-        printf("%s: command not found\n", cmd_name);
-      }
+        // 2. Try to execute as External Program
+        if (!found) {
+          char *full_path = ext_check(cmd_name);
+          if (full_path != NULL){
+            execute_external_program(full_path, argc, argv, redirect_out, redirect_err, redirect_out_append, redirect_err_append);
+          } else {
+            printf("%s: command not found\n", cmd_name);
+          }
+        }
+        
+        if (redirect_out) free(redirect_out);
+        if (redirect_err) free(redirect_err);
     }
 
     // Free memory allocated by strdup in parse_command
